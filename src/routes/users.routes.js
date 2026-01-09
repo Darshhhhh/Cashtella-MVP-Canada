@@ -1,28 +1,25 @@
 const prisma = require("../utils/db");
-const { createWallet } = require("../services/blockradar.service");
 
-async function userRoutes(fastify, options) {
-  fastify.post("/users", async (request, reply) => {
-    const { country } = request.body;
-
-    if (!country || !["CA", "US"].includes(country)) {
+async function userRoutes(fastify) {
+  fastify.post("/users", async (req, reply) => {
+    const { country } = req.body;
+    if (!["CA", "US"].includes(country)) {
       return reply.status(400).send({ error: "Invalid country" });
     }
 
-    const wallet = await createWallet();
-
     const user = await prisma.user.create({
-      data: {
-        country,
-        blockradarWalletId: wallet.id,
-      },
+      data: { country },
     });
 
-    return {
-      id: user.id,
-      country: user.country,
-      walletId: user.blockradarWalletId,
-    };
+    return user;
+  });
+
+  fastify.get("/users/:id", async (req, reply) => {
+    const user = await prisma.user.findUnique({
+      where: { id: req.params.id },
+    });
+    if (!user) return reply.status(404).send({ error: "Not found" });
+    return user;
   });
 }
 
