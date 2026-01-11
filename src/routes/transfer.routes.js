@@ -3,7 +3,9 @@ const router = express.Router();
 const {
   createTransfer,
   getTransferById,
-} = require("../repository/transfer.repository");
+  updateTransferStatus,
+} = require("../repositories/transfer.repository");
+const { createInteracRequest } = require("../services/interac.service");
 
 const { TRANSFER_STATES } = require("../domain/transferStateMachine");
 // Create a new transfer intent
@@ -23,6 +25,17 @@ router.post("/initiate", async (req, res) => {
       receiverId,
       amountCad,
       status: TRANSFER_STATES.PENDING,
+    });
+
+    const interac = await createInteracRequest({
+      transferId,
+      amountCad,
+    });
+
+    await updateTransferStatus({
+      id: transferId,
+      status: TRANSFER_STATES.PENDING,
+      interacRequestId: interac.interacRequestId,
     });
 
     return res.status(201).json({

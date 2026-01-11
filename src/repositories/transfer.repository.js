@@ -30,7 +30,25 @@ async function getTransferById(id) {
   return data;
 }
 
+async function updateTransferStatus({ id, status, interacRequestId }) {
+  const update = { status };
+
+  if (interacRequestId) {
+    update.interac_request_id = interacRequestId;
+  }
+
+  const { error } = await supabase
+    .from("transfers")
+    .update(update)
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`Failed to update transfer: ${error.message}`);
+  }
+}
+
 module.exports = {
   createTransfer,
   getTransferById,
+  updateTransferStatus,
 };
