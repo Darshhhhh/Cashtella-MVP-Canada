@@ -1,6 +1,6 @@
 require("dotenv").config();
 const express = require("express");
-
+const routes = require("./routes");
 const app = express();
 
 // middleware
@@ -14,6 +14,8 @@ app.get("/health", (req, res) => {
     timestamp: Date.now(),
   });
 });
+
+app.use("/api", routes);
 
 const PORT = process.env.PORT || 3000;
 
