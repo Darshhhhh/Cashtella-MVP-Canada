@@ -46,9 +46,35 @@ async function updateTransferStatus({ id, status, interacRequestId }) {
     throw new Error(`Failed to update transfer: ${error.message}`);
   }
 }
+async function updateTransferEconomics({
+  id,
+  usdtAmount,
+  usdAmount,
+  platformFeeCad,
+  cadToUsdtRate,
+  cadToUsdRate,
+  fxMarginUsdt,
+}) {
+  const { error } = await supabase
+    .from("transfers")
+    .update({
+      usdt_amount: usdtAmount,
+      usd_amount: usdAmount,
+      platform_fee_cad: platformFeeCad,
+      cad_to_usdt_rate: cadToUsdtRate,
+      cad_to_usd_rate: cadToUsdRate,
+      fx_margin_usdt: fxMarginUsdt,
+    })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(`Failed to update transfer economics: ${error.message}`);
+  }
+}
 
 module.exports = {
   createTransfer,
   getTransferById,
   updateTransferStatus,
+  updateTransferEconomics,
 };

@@ -47,6 +47,57 @@ async function creditWallet({ userId, currency, amount }) {
   }
 }
 
+/**
+ * Credit company master wallet
+ * Used for fees, margins, revenue
+ * Types: PLATFORM_FEE | PLATFORM_PROFIT
+ */
+async function creditMasterWallet({ masterType, currency, amount }) {
+  const MASTER_USER_ID = `CASHTELLA_${masterType}`;
+
+  const { data, error } = await supabase
+    .from("wallets")
+    .select("*")
+    .eq("user_id", MASTER_USER_ID)
+    .eq("currency", currency)
+    .single();
+
+  if (error && error.code !== "PGRST116") {
+    throw new Error("Failed to read master wallet");
+  }
+
+  if (!data) {
+    const { error: insertError } = await supabase
+      .from("wallets")
+      .insert([
+        {
+          user_id: MASTER_USER_ID,
+          currency,
+          balance: amount
+        }
+      ]);
+
+    if (insertError) {
+      throw new Error("Failed to create master wallet");
+    }
+
+    return;
+  }
+
+  const { error: updateError } = await supabase
+    .from("wallets")
+    .update({
+      balance: Number(data.balance) + amount,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", data.id);
+
+  if (updateError) {
+    throw new Error("Failed to update master wallet");
+  }
+}
+
 module.exports = {
   creditWallet,
+  creditMasterWallet,
 };

@@ -1,7 +1,11 @@
 const express = require("express");
 const { supabase } = require("../services/supabase");
 
-const { updateTransferStatus } = require("../repositories/transfer.repository");
+const {
+  updateTransferStatus,
+  updateTransferEconomics,
+} = require("../repositories/transfer.repository");
+
 const {
   assertValidTransition,
   TRANSFER_STATES,
@@ -9,12 +13,18 @@ const {
 
 const { convertCadToStablecoin } = require("../services/bridge.service");
 const { getCadToUsdRate } = require("../services/fx.service");
-const { creditWallet } = require("../services/ledger.service");
+const {
+  creditWallet,
+  creditMasterWallet,
+} = require("../services/ledger.service");
 
 const router = express.Router();
 
+const TRANSACTION_FEE_CAD = 1.99;
+
 /**
  * POST /webhook/interac
+ * Interac authorization webhook
  */
 router.post("/interac", async (req, res) => {
   try {
@@ -24,7 +34,9 @@ router.post("/interac", async (req, res) => {
       return res.status(400).json({ error: "Invalid webhook payload" });
     }
 
-    // fetch transfer
+    /**
+     * Fetch transfer
+     */
     const { data: transfers, error } = await supabase
       .from("transfers")
       .select("*")
@@ -38,7 +50,10 @@ router.post("/interac", async (req, res) => {
     const transfer = transfers[0];
     const normalizedStatus = status.toUpperCase();
 
-    // OPTION A: idempotent handling
+    /**
+     * OPTION A — Idempotency
+     * If already processed beyond PENDING, acknowledge and exit
+     */
     if (transfer.status !== TRANSFER_STATES.PENDING) {
       return res.json({ ok: true });
     }
@@ -47,31 +62,39 @@ router.post("/interac", async (req, res) => {
       return res.status(400).json({ error: "Unsupported Interac status" });
     }
 
-    // PENDING → AUTHORIZED
+    /**
+     * PENDING → AUTHORIZED
+     */
     assertValidTransition(transfer.status, TRANSFER_STATES.AUTHORIZED);
     await updateTransferStatus({
       id: transfer.id,
       status: TRANSFER_STATES.AUTHORIZED,
     });
 
-    // AUTHORIZED → CONVERTING
+    /**
+     * AUTHORIZED → CONVERTING
+     */
     await updateTransferStatus({
       id: transfer.id,
       status: TRANSFER_STATES.CONVERTING,
     });
 
     /**
-     * -----------------------------
-     * USER-FACING FX (receiver)
-     * -----------------------------
+     * ---------------------------------------
+     * USER-FACING FX (receiver payout)
+     * ---------------------------------------
+     * Receiver gets value of principal only
      */
-    const userFxRate = await getCadToUsdRate();
-    const userPayoutUsd = Number((transfer.amount_cad * userFxRate).toFixed(2));
+    const cadToUsdRate = await getCadToUsdRate();
+
+    const userPayoutUsd = Number(
+      (transfer.amount_cad * cadToUsdRate).toFixed(2)
+    );
 
     /**
-     * -----------------------------
-     * SETTLEMENT (company)
-     * -----------------------------
+     * ---------------------------------------
+     * SETTLEMENT (backend / treasury)
+     * ---------------------------------------
      */
     const settlement = await convertCadToStablecoin({
       transferId: transfer.id,
@@ -79,28 +102,50 @@ router.post("/interac", async (req, res) => {
     });
 
     const settlementUsd = Number(
-      settlement.usdtAmount.toFixed(2) // USDT ≈ USD
+      settlement.usdtAmount.toFixed(6) // USDT ≈ USD
     );
 
     /**
-     * -----------------------------
-     * COMPANY FX MARGIN (internal)
-     * -----------------------------
+     * ---------------------------------------
+     * PLATFORM ECONOMICS (persisted facts)
+     * ---------------------------------------
      */
+    const cadToUsdtRate = Number(
+      (settlement.usdtAmount / transfer.amount_cad).toFixed(6)
+    );
+    const fxMarginUsdt = Number(
+      (settlement.usdtAmount - userPayoutUsd).toFixed(6)
+    );
     const fxMarginUsd = Number((settlementUsd - userPayoutUsd).toFixed(2));
+
+    /**
+     * Persist finalized economics
+     * (this is the ONLY correct moment to do this)
+     */
+    await updateTransferEconomics({
+      id: transfer.id,
+      usdtAmount: settlement.usdtAmount,
+      usdAmount: userPayoutUsd,
+      platformFeeCad: TRANSACTION_FEE_CAD,
+      cadToUsdtRate,
+      cadToUsdRate,
+      fxMarginUsdt,
+    });
 
     console.log("TRANSFER ECONOMICS", {
       transferId: transfer.id,
+      principalCad: transfer.amount_cad,
       userPayoutUsd,
       settlementUsd,
       fxMarginUsd,
-      feeCad: 1.99,
+      platformFeeCad: TRANSACTION_FEE_CAD,
+      fxMarginUsdt,
     });
 
     /**
-     * -----------------------------
-     * CREDIT RECEIVER (FULL AMOUNT)
-     * -----------------------------
+     * ---------------------------------------
+     * CREDIT RECEIVER (USD)
+     * ---------------------------------------
      */
     await creditWallet({
       userId: transfer.receiver_id,
@@ -108,7 +153,27 @@ router.post("/interac", async (req, res) => {
       amount: userPayoutUsd,
     });
 
-    // CONVERTING → COMPLETED
+    /**
+     * ---------------------------------------
+     * COLLECT PLATFORM FEE (CAD)
+     * Sender paid principal + fee upstream
+     * ---------------------------------------
+     */
+    await creditMasterWallet({
+      masterType: "PLATFORM_FEE",
+      currency: "CAD",
+      amount: TRANSACTION_FEE_CAD,
+    });
+    if (fxMarginUsd > 0) {
+      await creditMasterWallet({
+        masterType: "PLATFORM_PROFIT",
+        currency: "USDT",
+        amount: fxMarginUsdt,
+      });
+    }
+    /**
+     * CONVERTING → COMPLETED
+     */
     await updateTransferStatus({
       id: transfer.id,
       status: TRANSFER_STATES.COMPLETED,

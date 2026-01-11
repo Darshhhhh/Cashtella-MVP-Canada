@@ -8,6 +8,7 @@ const {
 const { createInteracRequest } = require("../services/interac.service");
 
 const { TRANSFER_STATES } = require("../domain/transferStateMachine");
+const { supabase } = require("../services/supabase");
 // Create a new transfer intent
 router.post("/initiate", async (req, res) => {
   try {
@@ -18,6 +19,23 @@ router.post("/initiate", async (req, res) => {
     }
 
     const transferId = crypto.randomUUID();
+    const { data: sender } = await supabase
+      .from("users")
+      .select("id")
+      .eq("id", senderId)
+      .single();
+
+    const { data: receiver } = await supabase
+      .from("users")
+      .select("id")
+      .eq("id", receiverId)
+      .single();
+
+    if (!sender || !receiver) {
+      return res.status(400).json({
+        error: "Sender or receiver does not exist",
+      });
+    }
 
     await createTransfer({
       id: transferId,
